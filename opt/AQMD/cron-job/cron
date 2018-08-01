@@ -1,0 +1,2 @@
+#30 2 * * * /opt/AQMD/stop-aqmd.sh >> /home/deva/stoplog
+#30 13 * * * /opt/AQMD/start-aqmd.sh >> /home/deva/startlog

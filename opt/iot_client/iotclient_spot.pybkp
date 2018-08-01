@@ -1,0 +1,174 @@
+#! /usr/bin/env python3.4
+
+#Usage: sudo /bin/python3.4 /opt/iot_client/iotclient_spot.py  create|terminate|status
+#Example: sudo /bin/python3.4 /opt/iot_client/iotclient_spot.py  create  --> this will create iot client spot instance
+
+# Name           : /opt/iot_client/iotclient_spot.py 
+# Pupose         : To create/terminate IOT Client instances based on the given arguments
+# DATE           : Thu Dec 14 15:13:45 UTC 2017
+# Python Version : 3.4
+# Author         : Mahesh <mahesh@orzota.com>
+# Version        : 2.0
+# Requirements   : awscli and boto3 needs to installed
+
+import boto3
+import sys
+import os
+import smtplib
+import datetime
+import tzlocal
+from collections import defaultdict
+
+user = os.environ['SUDO_USER']
+TO = ['devops@orzota.com','karthigeyan@orzota.com,','vishnu.pb@orzota.com','anitha.m@orzota.com','aberami.g@orzota.com','sreemathan.r@orzota.com','venkata@orzota.com','saiteja.mv@orzota.com']
+#Function to send E-mail alert to the users
+def send_mail(TEXT,TEXT1):
+    SUBJECT = 'Orzota IOT-Client Spot Instance Create/Terminate Alert'
+    #TEXT = serv + ' ' + "IOT instance has been started by", user
+    TEXT = TEXT + TEXT1
+    #print (TEXT)
+    #print (' '.join(TEXT))
+    # Gmail Sign In
+    gmail_sender = 'orzota.customer1@gmail.com'
+    gmail_passwd = 'Customer1!'
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.ehlo()
+    server.starttls()
+    server.login(gmail_sender, gmail_passwd)
+    BODY = '\r\n'.join(['To: %s' % TO,
+                        'From: %s' % gmail_sender,
+                        'Subject: %s' % SUBJECT,
+                        '', TEXT])
+    #print (BODY)
+    try:
+        server.sendmail(gmail_sender, TO, BODY)
+        #print ('email sent')
+    except:
+        print ('error sending mail')
+
+    server.quit()
+
+#Function to get instance detail using Name tag
+def instance_details(tagkey, tag_value):
+
+    ec2 = boto3.resource('ec2')
+    
+    # Get information for all running instances
+    running_instances = ec2.instances.filter(Filters=[{
+        'Name': tagkey,
+        'Values': [tag_value]}])
+    
+    ec2info = defaultdict()
+    for instance in running_instances:
+        for tag in instance.tags:
+            if 'Name'in tag['Key']:
+                name = tag['Value']
+        # Add instance info to a dictionary         
+        ec2info[instance.id] = {
+            'Name': name,
+            'Type': instance.instance_type,
+            'State': instance.state['Name'],
+            'Private IP': instance.private_ip_address,
+            'Public IP': instance.public_ip_address,
+            'Launch Time': instance.launch_time,
+            'Keypair': instance.key_name
+            }
+    
+    attributes = ['Name', 'Type', 'State', 'Private IP', 'Public IP', 'Launch Time','Keypair']
+    for instance_id, instance in ec2info.items():
+        for key in attributes:
+            print("{0}: {1}".format(key, instance[key]))
+        print("------")
+
+#Main function to create spot instance with image_id, image_type, spot_price, instance_name(tag Name)    
+def create_spot(image_id, image_type, spot_price, instance_name):
+    client = boto3.client('ec2', region_name='us-east-1')
+    response = client.request_spot_instances(
+        DryRun=False,
+        SpotPrice=spot_price,
+        InstanceCount=1,
+        Type='one-time',
+        LaunchSpecification={
+            'ImageId': 'ami-2e8c6754',
+            'KeyName': 'access',
+            'Placement':{},
+            'SubnetId': 'subnet-8a08f5fd',
+            'InstanceType': image_type,
+            'BlockDeviceMappings': [
+                {  
+                    'DeviceName': '/dev/sda1', 
+                    'Ebs': {
+                        'VolumeSize': 30,
+                        'DeleteOnTermination': True,
+                        'VolumeType': 'gp2',
+                    },
+                },
+            ],
+    
+            'EbsOptimized': True,
+            'Monitoring': {
+                'Enabled': False
+            },
+            'SecurityGroupIds': [
+                'sg-b381ead6',
+            ],
+        }
+    )
+    
+    va = response['SpotInstanceRequests']
+    spot_id = va[0]['SpotInstanceRequestId']
+    #print (spot_id)
+    waiter = client.get_waiter('spot_instance_request_fulfilled')
+    print("waiting until spot instance will available")
+    waiter.wait(SpotInstanceRequestIds=[spot_id])
+    print("spot instance request fullfilled")
+    #Getting instance id
+    instance_id = client.describe_spot_instance_requests(
+                SpotInstanceRequestIds=[
+                  spot_id,
+                ],
+    )['SpotInstanceRequests'][0]['InstanceId']
+    client.create_tags(Resources=[instance_id], Tags=[{'Key':'Name', 'Value': instance_name}])
+    #Writing instance id to the temporary file. This file content will be used while terminating instance
+    instance_file = open('instance_id.txt', 'w')
+    instance_file.write(instance_id)
+    #print(instance_id)
+    return instance_id
+
+#This function is used to terminate the instance 
+def terminate_spot(ids):
+    client = boto3.client('ec2', region_name='us-east-1')
+    response = client.terminate_instances(
+    InstanceIds=[
+        ids,
+    ])    
+
+#Starting Main Python Programme from here   
+if len(sys.argv) < 2:
+    print ("usage: sudo python3.4 /opt/iot_client/iotclient_spot.py create|terminate|status")
+elif sys.argv[1] == "create":
+    print('Creating IOT Client Spot Instance')
+    #Calling Function create_spot with Arguments
+    create_spot('ami-2e8c6754', 'm4.large', '0.03', 'IOT_Client')
+    #Calling Function instance_details to get all details about launched spot instance
+    instance_details('tag:Name','IOT_Client')
+    send_mail("IOT-Client Spot instance has been created by" + ' ', user)
+elif sys.argv[1] == "terminate":
+    #Reading instance id from temporary file
+    var = open("instance_id.txt", "r+") 
+    instance_id = var.read()
+    print('Terminating IOT Client Spot Instance')
+    #terminating instnce
+    terminate_spot(instance_id)
+    var.close()
+    #Removing Temporary file
+    os.remove("instance_id.txt") 
+    send_mail("IOT-Client Spot instance has been terminated by" + ' ', user)
+elif sys.argv[1] == "status":
+    if os.path.exists('instance_id.txt')==True:
+        print ("Iot client instance is in running state:") 
+        instance_details('tag:Name','IOT_Client')
+    elif os.path.exists('instance_id.txt')==False:
+        print ("Currently there is no running iot_client instance")
+else:
+    print ("usage: sudo python3.4 /opt/iot_client/iotclient_spot.py create|terminate|status")

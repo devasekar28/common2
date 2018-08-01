@@ -1,0 +1,21 @@
+---
+  - name: Lauching instances
+    hosts: localhost
+    connection: local
+    tasks:
+       - name: Creating instance for cluster
+         ec2:
+            spot_price: 0.022
+            spot_wait_timeout: 600
+            keypair: Accesskeypair
+            group: default
+            instance_type: m4.large
+            ec2_region: us-east-2 
+            image: ami-dbbb88be
+            wait: true
+            exact_count: 1
+            count_tag:
+               class: demo_deva
+            instance_tags:
+               class: deva
+         register: ec2
